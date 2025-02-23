@@ -44,6 +44,30 @@ import struct
 from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty, FloatVectorProperty, EnumProperty, PointerProperty)
 from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences)
 
+class bytereader:
+  def __init__(self,buf,ptr):
+    self.buf=buf
+    self.ptr=ptr
+
+class rb:
+  # Read Bytes
+  def bytes(B,N):
+    v = B.buf[B.ptr:B.ptr+N]
+    B.ptr += N
+    return v
+  def u32(B):
+    v = struct.unpack_from("<I", B.buf, B.ptr)[0]
+    B.ptr += 4
+    return v
+  def f64(B):
+    v = struct.unpack_from("<d", B.buf, B.ptr)[0]
+    B.ptr += 8
+    return v
+  def f64v2(B):
+    v = struct.unpack_from("<dd", B.buf, B.ptr)
+    B.ptr += 16
+    return v
+
 class ab:
   # Append Bytes
   def u32(B,x):
@@ -166,14 +190,13 @@ class misc:
 
     return faceData, adjustedindexCount
 
-  def replace_object_data(obj, message, readPtr, selection_only, usedObjFaces):
+  def replace_object_data(obj, message, selection_only, usedObjFaces):
     bm = bmesh.from_edit_mesh(obj.data)
     bm.verts.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
     uv_layer = bm.loops.layers.uv.verify()
 
-    numResultVerts = struct.unpack_from("<I", message, readPtr)[0]
-    readPtr += 4
+    numResultVerts = rb.u32(message)
 
     currentUsedFaceIndex = 0
     finalUsedFace = len(usedObjFaces) - 1
@@ -182,14 +205,10 @@ class misc:
         if currentUsedFaceIndex < finalUsedFace:
           currentUsedFaceIndex += 1
         for loop in face.loops:
-          x = struct.unpack_from("<d", message, readPtr)[0]
-          readPtr += 8
-          y = struct.unpack_from("<d", message, readPtr)[0]
-          readPtr += 8
-          loop[uv_layer].uv = [x, y]
+          loop[uv_layer].uv = rb.f64v2(message)
 
     bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
-    return readPtr
+    return
 
   class QueueMessage:
     MESSAGE = 0
@@ -236,38 +255,30 @@ class misc:
       out_stream.write(binaryData)
       out_stream.flush()
 
-      message = ""
       while True:
         messageSize = struct.unpack("<I", process.stdout.read(4))[0]
-        message = process.stdout.read(messageSize)
-        readPtr = 0
-        messageType = struct.unpack_from("<I", message, readPtr)[0]
-        readPtr += 4
+        message = bytereader(process.stdout.read(messageSize), 0)
+        messageType = rb.u32(message)
         if messageType == 0: # success
           break
         elif messageType == 1: # progress
-          msg_queue.put((misc.QueueMessage.PROGRESS, struct.unpack_from("<d", message, readPtr)[0]))
+          msg_queue.put((misc.QueueMessage.PROGRESS, rb.f64(message)))
         elif messageType == 2: # error
-          msgSize = struct.unpack_from("<I", message, readPtr)[0]
-          readPtr += 4
-          msg = message[readPtr:readPtr+msgSize].decode()
+          msgSize = rb.u32(message)
+          msg = rb.bytes(message, msgSize).decode()
           msg_queue.put((misc.QueueMessage.MESSAGE, msg, misc.QueueMsgSeverity.ERROR))
           return
         else:
           print("Error: unsupported message " + str(messageType))
 
-      numObjects = struct.unpack_from("<I", message, readPtr)[0]
-      readPtr += 4
+      numObjects = rb.u32(message)
       for obj in range(0, numObjects):
-        objId = struct.unpack_from("<I", message, readPtr)[0]
-        readPtr += 4
-        nameSize = struct.unpack_from("<I", message, readPtr)[0]
-        readPtr += 4
-        objName = message[readPtr:readPtr+nameSize].decode()
-        readPtr += nameSize
-        readPtr = misc.replace_object_data(meshes[objId], message, readPtr, options["Selection"], usedFaces[objId])
+        objId = rb.u32(message)
+        nameSize = rb.u32(message)
+        objName = rb.bytes(message, nameSize).decode()
+        misc.replace_object_data(meshes[objId], message, options["Selection"], usedFaces[objId])
 
-      coverage = struct.unpack_from("<d", message, readPtr)[0]
+      coverage = rb.f64(message)
       msg_queue.put((misc.QueueMessage.STATS, str(round(coverage, 2))))
       msg_queue.put((misc.QueueMessage.MESSAGE, "Packing complete", misc.QueueMsgSeverity.WARNING))
     except:
