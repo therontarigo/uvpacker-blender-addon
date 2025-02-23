@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Theron Tarigo
 # Copyright (c) 2021 Boris Posavec
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -42,6 +43,26 @@ import threading
 import struct
 from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty, FloatVectorProperty, EnumProperty, PointerProperty)
 from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences)
+
+class ab:
+  # Append Bytes
+  def u32(B,x):
+    B += bytearray(struct.pack("<I",x))
+  def u32v3(B,x,y,z):
+    B += bytearray(struct.pack("<III",x,y,z))
+  def bool(B,x):
+    B += bytearray(struct.pack("<?",x))
+  def f64(B,x):
+    B += bytearray(struct.pack("<d",x))
+  def f64v2(B,x,y):
+    B += bytearray(struct.pack("<dd",x,y))
+  def f64v3(B,x,y,z):
+    B += bytearray(struct.pack("<ddd",x,y,z))
+
+class mb:
+  # Modify Bytes
+  def u32(B,O,x):
+    struct.pack_into("<I",B,O,x)
 
 class misc:
   UV_PACKER_MAP_NAME = "UV-Packer"
@@ -88,7 +109,7 @@ class misc:
         usedFaces[object_idx] = usedObjFaces
 
     data = bytearray()
-    data += (len(usedFaces)).to_bytes(4, byteorder="little")
+    ab.u32(data, len(usedFaces))
     data += allObjectData
     return data, usedFaces
 
@@ -110,15 +131,15 @@ class misc:
 
     objectData = bytearray()
     if len(usedObjFaces) > 0:
-      objectData += (object_idx).to_bytes(4, byteorder="little")
+      ab.u32(objectData, object_idx)
       nameBytes = obj.name.encode()
-      objectData += (len(nameBytes)).to_bytes(4, byteorder="little")
+      ab.u32(objectData, len(nameBytes))
       objectData.extend(nameBytes)
-      objectData += (len(bm.verts)).to_bytes(4, byteorder="little")
+      ab.u32(objectData, len(bm.verts))
       for vert in bm.verts:
-        objectData += bytearray(struct.pack("<ddd", vert.co.x, vert.co.y, vert.co.z))
+        ab.f64v3(objectData, vert.co.x, vert.co.y, vert.co.z)
 
-      objectData += (len(usedObjFaces)).to_bytes(4, byteorder="little")
+      ab.u32(objectData, len(usedObjFaces))
       objectData += allFaceData
 
     return objectData, usedObjFaces
@@ -126,7 +147,7 @@ class misc:
   def gather_face_data(face, uv_layer, indexCount, selection_only, syncmode):
     faceData = bytearray()
     adjustedindexCount = indexCount
-    faceData += (len(face.loops)).to_bytes(4, byteorder="little")
+    ab.u32(faceData, len(face.loops))
     for loop in face.loops:
       if selection_only:
         if syncmode and not face.select:
@@ -135,12 +156,12 @@ class misc:
           return bytearray(), indexCount
 
       vert = loop.vert
-      faceData += (vert.index).to_bytes(4, byteorder="little")
+      ab.u32(faceData, vert.index)
       uv_coord = loop[uv_layer].uv
       isPinned = loop[uv_layer].pin_uv
-      faceData += bytearray(struct.pack("<dd", uv_coord.x, uv_coord.y))
-      faceData += bytearray(struct.pack("<?", isPinned))
-      faceData += (adjustedindexCount).to_bytes(4, byteorder="little")
+      ab.f64v2(faceData, uv_coord.x, uv_coord.y)
+      ab.bool(faceData, isPinned)
+      ab.u32(faceData, adjustedindexCount)
       adjustedindexCount += 1
 
     return faceData, adjustedindexCount
@@ -183,17 +204,17 @@ class misc:
 
   def encodeOptions(options):
     data = bytearray()
-    data += (options["PackMode"]).to_bytes(4, byteorder="little")
-    data += (options["Width"]).to_bytes(4, byteorder="little")
-    data += (options["Height"]).to_bytes(4, byteorder="little")
-    data += bytearray(struct.pack("<d", options["Padding"]))
-    data += bytearray(struct.pack("<?", options["Combine"]))
-    data += bytearray(struct.pack("<?", options["Rescale"]))
-    data += bytearray(struct.pack("<?", options["PreRotate"]))
-    data += bytearray(struct.pack("<?", options["FullRotation"]))
-    data += (options["Rotation"]).to_bytes(4, byteorder="little")
-    data += (options["TilesX"]).to_bytes(4, byteorder="little")
-    data += (options["TilesY"]).to_bytes(4, byteorder="little")
+    ab.u32(data, options["PackMode"])
+    ab.u32(data, options["Width"])
+    ab.u32(data, options["Height"])
+    ab.f64(data, options["Padding"])
+    ab.bool(data, options["Combine"])
+    ab.bool(data, options["Rescale"])
+    ab.bool(data, options["PreRotate"])
+    ab.bool(data, options["FullRotation"])
+    ab.u32(data, options["Rotation"])
+    ab.u32(data, options["TilesX"])
+    ab.u32(data, options["TilesY"])
     return data
 
   def data_exchange_thread(process, options, meshes, msg_queue):
@@ -201,13 +222,12 @@ class misc:
 
     geometryData, usedFaces = misc.gather_geometry_data(meshes, options["Selection"])
     binaryData = bytearray()
-    binaryData += (bl_info["version"][0]).to_bytes(4, byteorder="little")
-    binaryData += (bl_info["version"][1]).to_bytes(4, byteorder="little")
-    binaryData += (bl_info["version"][2]).to_bytes(4, byteorder="little")
+    ab.u32(binaryData, 0)
+    ab.u32v3(binaryData, *bl_info["version"])
     binaryData += misc.encodeOptions(options)
     binaryData += geometryData
-    sumBytes = len(binaryData)
-    binaryData = sumBytes.to_bytes(4, byteorder="little") + binaryData
+    sumBytes = len(binaryData) - 4
+    mb.u32(binaryData, 0, sumBytes)
 
     msg_queue.put((misc.QueueMessage.MESSAGE, "Packing"))
 
